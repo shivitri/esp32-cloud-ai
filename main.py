@@ -36,16 +36,13 @@ def detect_gesture(landmarks):
     return "Searching..."
 
 # ── 🤖 HYBRID HEALTH CHECK ROUTER ─────────────────────────────────
-# This interceptor catches normal web requests from Render and keeps the engine alive
 async def process_request(connection, request):
-    path = request.path
     # If Render checks the link with a standard GET or HEAD request
     if request.method in ("GET", "HEAD") and "upgrade" not in request.headers:
         response_headers = [
             ("Content-Type", "text/plain"),
             ("Connection", "close"),
         ]
-        # Return a healthy 200 OK text response
         return http.HTTPStatus.OK, response_headers, b"AI Core Online"
     return None
 
@@ -93,8 +90,8 @@ async def handle_esp32_client(websocket):
     except Exception as e:
         print(f"[SYSTEM ERROR] Engine loop exception: {e}")
 
-async main():
-    # Pass process_request directly into the server arguments
+# ── 🚀 FIXED ENTRYPOINT FUNCTION ──────────────────────────────────
+async def main():
     async with websockets.serve(
         handle_esp32_client, 
         "0.0.0.0", 
