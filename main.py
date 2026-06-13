@@ -4,8 +4,6 @@ import cv2
 import numpy as np
 import mediapipe as mp
 import time
-import http
-from websockets.server import WebSocketServerProtocol
 
 # ── MEDIAPIPE INITIALIZATION ─────────────────────────────────────
 mp_hands = mp.solutions.hands
@@ -36,11 +34,17 @@ def detect_gesture(landmarks):
     elif fingers == [1, 0, 0, 0, 0]: return "REST"       
     return "Searching..."
 
-# ── 🤖 CUSTOM PROTOCOL TO SILENTLY HANDLE RENDER PINGS ───────────
-class HealthCheckServerProtocol(WebSocketServerProtocol):
-    async def process_request(self, path, request_headers):
-        # Intercept Render's Health Check Scanner BEFORE the websocket handshake fails
+# ── 🤖 CUSTOM HEALTH SCAN INTERCEPTOR ─────────────────────────────
+async def process_request(path, request_headers):
+    # If the upgrade header isn't there, it's Render's health scanner pinging us!
+    if "upgrade" not in request_headers.get("Connection", "").lower() and \
+       "websocket" != request_headers.get("Upgrade", "").lower():
+        # Respond immediately with HTTP 200 OK to keep Render happy and green
         return http.HTTPStatus.OK, [("Content-Type", "text/plain")], b"AI Core Online\n"
+    return None
+
+# Import http down here to prevent any early-load namespace blocks
+import http
 
 # ── UNIFIED CLOUD PROCESSING LOOP ─────────────────────────────────
 async def handle_esp32_client(websocket):
@@ -88,12 +92,12 @@ async def handle_esp32_client(websocket):
 
 # ── 🚀 RUN TIME ENTRYPOINT ───────────────────────────────────────
 async def main():
-    # Use our custom protocol class to process incoming web packets safely
+    # Pass our custom process_request method natively into the initialization block
     async with websockets.serve(
         handle_esp32_client, 
         "0.0.0.0", 
-        10000, 
-        create_protocol=HealthCheckServerProtocol
+        10000,
+        process_request=process_request
     ):
         print("[BOOT] Unified Cloud WebSocket Processing Core Online on Port 10000...")
         await asyncio.Future()
