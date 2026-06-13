@@ -1,16 +1,21 @@
-import asyncio
-import websockets
+import os
 import cv2
 import numpy as np
 import mediapipe as mp
 import time
+from flask import Flask
+from flask_sock import Sock
+
+# ── INITIALIZE FLASK & WEBSOCKET ENGINE ───────────────────────────
+app = Flask(__name__)
+sock = Sock(app)
 
 # ── MEDIAPIPE INITIALIZATION ─────────────────────────────────────
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
     max_num_hands=1,
-    model_complexity=0, 
+    model_complexity=0, # Optimized for cloud execution
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
 )
@@ -34,30 +39,27 @@ def detect_gesture(landmarks):
     elif fingers == [1, 0, 0, 0, 0]: return "REST"       
     return "Searching..."
 
-# ── 🤖 CUSTOM HEALTH SCAN INTERCEPTOR ─────────────────────────────
-async def process_request(path, request_headers):
-    # If the upgrade header isn't there, it's Render's health scanner pinging us!
-    if "upgrade" not in request_headers.get("Connection", "").lower() and \
-       "websocket" != request_headers.get("Upgrade", "").lower():
-        # Respond immediately with HTTP 200 OK to keep Render happy and green
-        return http.HTTPStatus.OK, [("Content-Type", "text/plain")], b"AI Core Online\n"
-    return None
+# ── 🌐 RENDER HEALTH CHECK ROUTE ──────────────────────────────────
+@app.route('/')
+@app.route('/healthz')
+def health_check():
+    # Automatically answers GET/HEAD requests to keep Render completely green
+    return "AI Core Online", 200
 
-# Import http down here to prevent any early-load namespace blocks
-import http
-
-# ── UNIFIED CLOUD PROCESSING LOOP ─────────────────────────────────
-async def handle_esp32_client(websocket):
-    print(f"[CLOUD] ESP32-CAM Client connected via secure cloud port tunnel!")
+# ── 🔌 ESP32-CAM STREAMING ROUTE ──────────────────────────────────
+@sock.route('/')
+def handle_esp32_client(ws):
+    print("[CLOUD] ESP32-CAM Client linked via secure WebSocket route!")
     last_mp_time = 0
-    MP_INTERVAL = 0.03 
+    MP_INTERVAL = 0.03 # Throttled processing cycle
 
-    try:
-        async for message in websocket:
-            if isinstance(message, str):
+    while True:
+        try:
+            message = ws.receive()
+            if not message:
                 continue
 
-            # Process Incoming JPEG Stream
+            # Process incoming frame buffer bytes
             now = time.time()
             if now - last_mp_time >= MP_INTERVAL:
                 last_mp_time = now
@@ -83,24 +85,14 @@ async def handle_esp32_client(websocket):
                     payload = f"{current_gesture}|{coord_string}" if coord_string else f"{current_gesture}|NODATA"
                     print(f"[ENGINE] Target Signature: {current_gesture}")
                     
-                    await websocket.send(payload)
+                    ws.send(payload)
 
-    except websockets.exceptions.ConnectionClosed:
-        print("[CLOUD] ESP32 client disconnected cleanly.")
-    except Exception as e:
-        print(f"[SYSTEM ERROR] Engine loop exception: {e}")
+        except Exception as e:
+            print(f"[DISCONNECT] Client connection dropped: {e}")
+            break
 
-# ── 🚀 RUN TIME ENTRYPOINT ───────────────────────────────────────
-async def main():
-    # Pass our custom process_request method natively into the initialization block
-    async with websockets.serve(
-        handle_esp32_client, 
-        "0.0.0.0", 
-        10000,
-        process_request=process_request
-    ):
-        print("[BOOT] Unified Cloud WebSocket Processing Core Online on Port 10000...")
-        await asyncio.Future()
-
+# ── 🚀 LAUNCH ENGINE ─────────────────────────────────────────────
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Render binds automatically to port 10000
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
