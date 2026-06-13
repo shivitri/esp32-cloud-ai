@@ -1,6 +1,6 @@
 """
 ================================================================
- CLOUD-NATIVE MAIN ENGINE (DEPLOYMENT READY)
+ CLOUD-NATIVE MAIN ENGINE — INTEGRATED SCANNED WORKAROUND
 ================================================================
 """
 import os
@@ -11,16 +11,35 @@ import socket
 import threading
 import time
 import struct
+import http.server
+import socketserver
 from collections import deque
 
+# ── 🛠️ 1. DUMMY WEB SERVER WORKAROUND FOR RENDER FREE TIER ──────
+def run_dummy_web_server():
+    PORT = 10000  # Render looks at port 10000 by default for Python services
+    Handler = http.server.SimpleHTTPRequestHandler
+    socketserver.TCPServer.allow_reuse_address = True
+    try:
+        with socketserver.TCPServer(("", PORT), Handler) as httpd:
+            print(f"[Web Server] Listening on port {PORT} for Render health checks...")
+            httpd.serve_forever()
+    except Exception as e:
+        print(f"[Web Server Error] Could not start port 10000 dummy listener: {e}")
+
+# Instantly spin up the dummy web server thread so Render stays green
+web_thread = threading.Thread(target=run_dummy_web_server, daemon=True)
+web_thread.start()
+
+
 # ── ☁️ BINDING CONFIGURATION FOR CLOUD NETWORKING ────────────────
-# Cloud providers expose all incoming traffic locally on 0.0.0.0
 ESP32_IP     = "0.0.0.0" 
 STREAM_PORT  = 81
 GESTURE_PORT = 82
 
 latest_frame  = deque(maxlen=1)   
 gesture_queue = deque(maxlen=2)   
+
 
 # ── MEDIAPIPE CORE INITIALIZATION ────────────────────────────────
 mp_hands = mp.solutions.hands
@@ -51,13 +70,13 @@ def detect_gesture(landmarks):
     elif fingers == [1, 0, 0, 0, 0]: return "REST"       
     return ""
 
+
 # ================================================================
 #  THREAD 1 — Background Stream Reader (Server Listener Mode)
 # ================================================================
 def tcp_stream_reader():
     while True:
         try:
-            # Shifted to a listening socket so the cloud accepts the ESP32's call
             server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_sock.bind((ESP32_IP, STREAM_PORT))
@@ -88,6 +107,7 @@ def tcp_stream_reader():
             latest_frame.clear()
             time.sleep(1.0)
 
+
 # ================================================================
 #  THREAD 2 — Background Signal Channel (Server Listener Mode)
 # ================================================================
@@ -117,9 +137,11 @@ def gesture_sender():
             print(f"[Data Warning] Re-initializing socket due to: {e}")
             time.sleep(1.0)
 
+
 # Run background network daemons immediately
 threading.Thread(target=tcp_stream_reader, daemon=True).start()
 threading.Thread(target=gesture_sender, daemon=True).start()
+
 
 # ================================================================
 #  MAIN COMPUTATION RUNTIME
@@ -175,5 +197,4 @@ while True:
     fps_count += 1
     if now - fps_timer >= 1.0:
         fps_display, fps_count, fps_timer = fps_count, 0, now
-        # Output directly to Render's live text log interface instead of a UI window
         print(f"[LIVE LOG] FPS: {fps_display} | Pipeline Sign: {current_gesture}")
