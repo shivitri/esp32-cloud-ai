@@ -9,8 +9,7 @@
 #   [5] Proper cleanup of MediaPipe on every disconnect
 #
 # RENDER DEPLOYMENT:
-#   Start Command: gunicorn -k gevent -w 1 server:app
-#   (Replace "server" with your actual filename without .py)
+#   Start Command: gunicorn -k gevent -w 1 --bind 0.0.0.0:10000 main:app
 #   Add to requirements.txt: gunicorn, gevent
 # ================================================================
 
@@ -184,6 +183,6 @@ def handle_esp32_client(ws):
 if __name__ == "__main__":
     # NOTE: For Render, use gunicorn instead of this dev server.
     # Set your Render Start Command to:
-    #   gunicorn -k gevent -w 1 server:app
+    #   gunicorn -k gevent -w 1 --bind 0.0.0.0:10000 main:app
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, debug=False)
