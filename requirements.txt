@@ -1,4 +1,5 @@
 numpy<2.0.0
 opencv-python-headless
 mediapipe==0.10.14
-websockets
+flask
+flask-sock
