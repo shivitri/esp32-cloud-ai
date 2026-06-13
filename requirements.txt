@@ -4,5 +4,5 @@ gunicorn==21.2.0
 gevent==23.9.1
 gevent-websocket==0.10.1
 opencv-python==4.8.1.78
-mediapipe==0.10.3
+mediapipe==0.10.14
 numpy==1.24.3
