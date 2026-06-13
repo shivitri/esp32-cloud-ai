@@ -5,6 +5,7 @@ import numpy as np
 import mediapipe as mp
 import time
 import http
+from websockets.server import WebSocketServerProtocol
 
 # ── MEDIAPIPE INITIALIZATION ─────────────────────────────────────
 mp_hands = mp.solutions.hands
@@ -35,16 +36,11 @@ def detect_gesture(landmarks):
     elif fingers == [1, 0, 0, 0, 0]: return "REST"       
     return "Searching..."
 
-# ── 🤖 HYBRID HEALTH CHECK ROUTER ─────────────────────────────────
-async def process_request(connection, request):
-    # If Render checks the link with a standard GET or HEAD request
-    if request.method in ("GET", "HEAD") and "upgrade" not in request.headers:
-        response_headers = [
-            ("Content-Type", "text/plain"),
-            ("Connection", "close"),
-        ]
-        return http.HTTPStatus.OK, response_headers, b"AI Core Online"
-    return None
+# ── 🤖 CUSTOM PROTOCOL TO SILENTLY HANDLE RENDER PINGS ───────────
+class HealthCheckServerProtocol(WebSocketServerProtocol):
+    async def process_request(self, path, request_headers):
+        # Intercept Render's Health Check Scanner BEFORE the websocket handshake fails
+        return http.HTTPStatus.OK, [("Content-Type", "text/plain")], b"AI Core Online\n"
 
 # ── UNIFIED CLOUD PROCESSING LOOP ─────────────────────────────────
 async def handle_esp32_client(websocket):
@@ -90,13 +86,14 @@ async def handle_esp32_client(websocket):
     except Exception as e:
         print(f"[SYSTEM ERROR] Engine loop exception: {e}")
 
-# ── 🚀 FIXED ENTRYPOINT FUNCTION ──────────────────────────────────
+# ── 🚀 RUN TIME ENTRYPOINT ───────────────────────────────────────
 async def main():
+    # Use our custom protocol class to process incoming web packets safely
     async with websockets.serve(
         handle_esp32_client, 
         "0.0.0.0", 
         10000, 
-        process_request=process_request
+        create_protocol=HealthCheckServerProtocol
     ):
         print("[BOOT] Unified Cloud WebSocket Processing Core Online on Port 10000...")
         await asyncio.Future()
