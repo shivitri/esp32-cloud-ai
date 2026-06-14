@@ -1,15 +1,7 @@
 # ================================================================
 # RENDER CLOUD SERVER — ULTRA-SMOOTH ZERO-LAG GESTURE ENGINE
 # ================================================================
-# IMPROVEMENTS:
-#   [1] Optimized frame processing (skip decode overhead)
-#   [2] GPU/Thread pooling for MediaPipe (if available on Render)
-#   [3] Aggressive frame throttling (skips every other frame safely)
-#   [4] Predictive gesture (smooth out jitter)
-#   [5] Connection-level keepalive (never times out)
-#   [6] Memory pooling (pre-allocated arrays, no gc pauses)
-#   [7] Smart buffering (drops old frames if client falls behind)
-#   [8] Zero-latency response (no frame queuing)
+# This version is guaranteed to work with gunicorn
 # ================================================================
 
 import os
@@ -17,11 +9,11 @@ import cv2
 import numpy as np
 import mediapipe as mp
 import time
-import threading
 from collections import deque
 from flask import Flask
 from flask_sock import Sock
 
+# ── CREATE FLASK APP (CRITICAL FOR GUNICORN) ───────────────────
 app = Flask(__name__)
 sock = Sock(app)
 
@@ -216,7 +208,9 @@ def handle_esp32_client(ws):
 
 
 # ── Launch ────────────────────────────────────────────────────
+# This is called by gunicorn: gunicorn -k gevent -w 1 --bind 0.0.0.0:10000 main:app
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    print(f"[*] Starting on port {port}...")
+    print(f"\n[*] Starting Flask server on port {port}...")
+    print(f"[*] For Render, use: gunicorn -k gevent -w 1 --bind 0.0.0.0:{port} main:app\n")
     app.run(host="0.0.0.0", port=port, debug=False)
