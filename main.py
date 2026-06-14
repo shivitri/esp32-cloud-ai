@@ -1,25 +1,37 @@
 # ================================================================
-# RENDER CLOUD SERVER — ULTRA-LIGHTWEIGHT (MINIMAL MEMORY)
+# RENDER CLOUD SERVER — WEBSOCKET STREAM (FIXED FOR STABILITY)
 # ================================================================
-# This version uses minimal resources to prevent worker timeouts
+# Fixed to handle the WebSocket connection without timeouts
+# or memory issues
 # ================================================================
 
 import os
 import cv2
 import numpy as np
 import mediapipe as mp
-from flask import Flask, request
+import time
+from flask import Flask
+from flask_sock import Sock
 
 app = Flask(__name__)
+sock = Sock(app)
 
-# ── Single Global MediaPipe Instance (reuse, don't recreate) ──
-hands = mp.solutions.hands.Hands(
+# ── MediaPipe Setup (GLOBAL, not per-connection) ───────────────
+# This is fine because flask_sock handles concurrency with gevent
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(
     static_image_mode=False,
     max_num_hands=1,
     model_complexity=0,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
 )
+
+# ── Constants ──────────────────────────────────────────────────
+MIN_FRAME_BYTES = 100
+MAX_FRAME_BYTES = 20000
+MP_INTERVAL     = 0.05  # Process at 20fps max
+
 
 # ── Gesture Classifier ─────────────────────────────────────────
 def detect_gesture(landmarks):
@@ -52,55 +64,101 @@ def detect_gesture(landmarks):
 @app.route('/')
 @app.route('/healthz')
 def health_check():
-    return "OK", 200
+    return "AI Core Online", 200
 
 
-# ── Frame Upload Endpoint ──────────────────────────────────────
-@app.route('/upload', methods=['POST'])
-def upload_frame():
-    try:
-        frame_data = request.get_data()
-        
-        if not frame_data or len(frame_data) < 100 or len(frame_data) > 20000:
-            return "Searching...|NODATA", 200
-        
-        # Decode JPEG quickly
-        np_arr = np.frombuffer(frame_data, dtype=np.uint8)
-        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        
-        if frame is None:
-            return "Searching...|NODATA", 200
-        
-        h, w = frame.shape[:2]
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Run MediaPipe (single instance, reused)
-        results = hands.process(rgb)
-        
-        gesture = "Searching..."
-        coords = ""
-        
-        if results.multi_hand_landmarks:
-            for lms in results.multi_hand_landmarks:
-                detected = detect_gesture(lms.landmark)
-                if detected:
-                    gesture = detected
-                
-                # Build coordinate string
-                coord_list = []
-                for lm in lms.landmark:
-                    px = max(0, min(int(lm.x * w), w - 1))
-                    py = max(0, min(int(lm.y * h), h - 1))
-                    coord_list.append(f"{px},{py}")
-                coords = ";".join(coord_list)
-        
-        response = f"{gesture}|{coords}" if coords else f"{gesture}|NODATA"
-        return response, 200
+# ── WebSocket Handler ──────────────────────────────────────────
+@sock.route('/')
+def handle_esp32_client(ws):
+    print("[CLOUD] ESP32 client connected!")
     
-    except:
-        return "Searching...|NODATA", 200
+    last_mp_time = 0
+    frames_received = 0
+
+    try:
+        while True:
+            # Receive with timeout
+            try:
+                data = ws.receive(timeout=60)  # 60 second timeout
+            except Exception as recv_err:
+                print(f"[DISCONNECT] Receive error: {recv_err}")
+                break
+
+            if data is None:
+                print("[DISCONNECT] Client closed")
+                break
+
+            # Type check
+            if not isinstance(data, (bytes, bytearray)):
+                continue
+
+            frame_len = len(data)
+            frames_received += 1
+
+            # ── Frame validation ──
+            if frame_len < MIN_FRAME_BYTES or frame_len > MAX_FRAME_BYTES:
+                continue
+
+            # ── Throttle MediaPipe ──
+            now = time.time()
+            if now - last_mp_time < MP_INTERVAL:
+                continue
+            last_mp_time = now
+
+            # ── Process frame ──
+            try:
+                np_arr = np.frombuffer(data, dtype=np.uint8)
+                frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+                if frame is None:
+                    continue
+
+                h, w = frame.shape[:2]
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                # Run MediaPipe
+                results = hands.process(rgb)
+
+                gesture = "Searching..."
+                coords = ""
+
+                if results.multi_hand_landmarks:
+                    for lms in results.multi_hand_landmarks:
+                        detected = detect_gesture(lms.landmark)
+                        if detected:
+                            gesture = detected
+
+                        # Map coordinates
+                        coord_list = []
+                        for lm in lms.landmark:
+                            px = max(0, min(int(lm.x * w), w - 1))
+                            py = max(0, min(int(lm.y * h), h - 1))
+                            coord_list.append(f"{px},{py}")
+                        coords = ";".join(coord_list)
+
+                payload = f"{gesture}|{coords}" if coords else f"{gesture}|NODATA"
+                ws.send(payload)
+
+                # Log every 50 frames
+                if frames_received % 50 == 0:
+                    print(f"[ENGINE] Gesture={gesture} | Frame={frame_len}B | Total={frames_received}")
+
+            except Exception as proc_err:
+                # Frame processing error - don't crash, just skip
+                print(f"[ERROR] Frame {frames_received} failed: {type(proc_err).__name__}")
+                try:
+                    ws.send("Searching...|NODATA")
+                except Exception:
+                    break
+
+    except Exception as fatal_err:
+        print(f"[FATAL] Handler error: {fatal_err}")
+
+    finally:
+        print(f"[CLOUD] Client disconnected after {frames_received} frames")
 
 
+# ── Launch ────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port, debug=False)
